@@ -1,0 +1,431 @@
+{
+  "name": "AI Lead Qualification & Follow-up System",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "lead-intake",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "name": "Lead Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || $input.first().json;\nreturn [{ json: {\n  name: (b.name || '').trim(),\n  email: (b.email || '').trim().toLowerCase(),\n  company: (b.company || '').trim(),\n  budget: b.budget || 'not stated',\n  timeline: b.timeline || 'not stated',\n  message: (b.message || '').trim(),\n  source: b.source || 'website',\n  received_at: new Date().toISOString()\n}}];"
+      },
+      "name": "Normalize Lead",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite-preview:generateContent",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ systemInstruction: { parts: [{ text: \"You are a lead qualification assistant for a home renovation and home services business. Reply ONLY with JSON in this shape: {\\\"intent_summary\\\":\\\"one sentence\\\",\\\"budget_fit\\\":\\\"low|medium|high\\\",\\\"reply_subject\\\":\\\"string\\\",\\\"reply_body\\\":\\\"short friendly personalised plain-text email, signed by the team\\\"}. Write the reply so it responds to what the lead actually asked. Do not promise prices. If the lead seems ready, suggest a short call or site visit.\" }] }, contents: [{ role: 'user', parts: [{ text: 'Lead: ' + JSON.stringify($json) }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.3 } }) }}",
+        "options": {}
+      },
+      "name": "Gemini Qualify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "Gemini (x-goog-api-key)"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const parts = $input.first().json.candidates[0].content.parts;\nconst text = parts.filter(p => p.text && !p.thought).map(p => p.text).join('');\nconst ai = JSON.parse(text.replace(/```json|```/g, '').trim());\nconst lead = $('Normalize Lead').first().json;\n\n// Rule-based scoring (predictable, not AI-guessed)\nconst budgetHasAmount = /\\d/.test(String(lead.budget || ''));\nconst timeline = String(lead.timeline || '');\nconst notSoon = /later|maybe|someday|not sure|not stated|next year|no idea/i.test(timeline);\nconst urgent = !notSoon && /asap|urgent|immediately|now|this week|this month|next week|few weeks|two weeks|2 weeks|1 month|one month|days/i.test(timeline);\nconst message = String(lead.message || '');\nconst wantsQuote = /quote|price|cost|charge|how much|estimate|visit|book|available/i.test(message);\n\nlet score = 0;\nif (message.length >= 20) score += 20;\nif (wantsQuote) score += 20;\nif (budgetHasAmount) score += 30;\nif (urgent) score += 20;\nif (lead.company) score += 5;\nif (lead.name) score += 5;\n\nlet tier = 'cold';\nif (budgetHasAmount && urgent) tier = 'hot';\nelse if (score >= 30) tier = 'warm';\n\nreturn [{ json: { ...lead, ...ai, score, tier, status: 'new' } }];"
+      },
+      "name": "Parse Score",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": ""
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {},
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "name": "Log to CRM Sheet",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        880,
+        300
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Parse Score').item.json.tier }}",
+                    "rightValue": "hot",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "hot"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Parse Score').item.json.tier }}",
+                    "rightValue": "warm",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "warm"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict"
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $('Parse Score').item.json.tier }}",
+                    "rightValue": "cold",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "cold"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Route by Tier",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1100,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "name",
+          "value": "#leads"
+        },
+        "text": "=🔥 Hot lead: {{ $('Parse Score').item.json.name }} ({{ $('Parse Score').item.json.company }})\nScore: {{ $('Parse Score').item.json.score }} | Budget: {{ $('Parse Score').item.json.budget }}\n{{ $('Parse Score').item.json.intent_summary }}\n{{ $('Parse Score').item.json.email }}",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "name": "Slack Hot Lead Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        1340,
+        100
+      ],
+      "credentials": {
+        "slackApi": {
+          "id": "",
+          "name": "Slack"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Parse Score').item.json.email }}",
+        "subject": "={{ $('Parse Score').item.json.reply_subject }}",
+        "message": "={{ $('Parse Score').item.json.reply_body }}",
+        "emailType": "text",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Email Hot Lead",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1340,
+        260
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Parse Score').item.json.email }}",
+        "subject": "={{ $('Parse Score').item.json.reply_subject }}",
+        "message": "={{ $('Parse Score').item.json.reply_body }}",
+        "emailType": "text",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Email Warm Lead",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1340,
+        440
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 2,
+        "unit": "days"
+      },
+      "name": "Wait 2 Days",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1560,
+        440
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $('Parse Score').item.json.email }}",
+        "subject": "=Quick follow-up, {{ $('Parse Score').item.json.name }}",
+        "message": "=Hi {{ $('Parse Score').item.json.name }},\n\nJust checking whether you had a chance to read my earlier note. Happy to answer any questions or book a short call whenever suits you.\n\nBest regards",
+        "emailType": "text",
+        "options": {
+          "appendAttribution": false
+        }
+      },
+      "name": "Warm Follow-up",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        1780,
+        440
+      ],
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "",
+          "name": "Gmail"
+        }
+      }
+    },
+    {
+      "parameters": {},
+      "name": "Cold Nurture (Mailchimp)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1340,
+        620
+      ],
+      "notes": "Placeholder: replace with Mailchimp > Add member to audience",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Lead Webhook": {
+      "main": [
+        [
+          {
+            "node": "Normalize Lead",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Lead": {
+      "main": [
+        [
+          {
+            "node": "Gemini Qualify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini Qualify": {
+      "main": [
+        [
+          {
+            "node": "Parse Score",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Score": {
+      "main": [
+        [
+          {
+            "node": "Log to CRM Sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log to CRM Sheet": {
+      "main": [
+        [
+          {
+            "node": "Route by Tier",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route by Tier": {
+      "main": [
+        [
+          {
+            "node": "Slack Hot Lead Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Email Hot Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Email Warm Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Cold Nurture (Mailchimp)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Warm Lead": {
+      "main": [
+        [
+          {
+            "node": "Wait 2 Days",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 2 Days": {
+      "main": [
+        [
+          {
+            "node": "Warm Follow-up",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

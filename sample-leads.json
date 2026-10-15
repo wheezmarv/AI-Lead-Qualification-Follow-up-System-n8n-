@@ -1,0 +1,26 @@
+{
+  "hot": {
+    "name": "Oladipupo Marvellous",
+    "email": "you@example.com",
+    "company": "Marvellous Home Solutions",
+    "budget": "₦2,000,000",
+    "timeline": "this month",
+    "message": "We need a full home renovation quote for a 4-bedroom flat in Lekki. Ready to start in two weeks."
+  },
+  "warm": {
+    "name": "Oladipupo Marvellous",
+    "email": "you@example.com",
+    "company": "Marvellous Home Solutions",
+    "budget": "not sure yet",
+    "timeline": "maybe later this year",
+    "message": "Hi, I'm thinking about renovating my kitchen at some point. What do you usually charge?"
+  },
+  "cold": {
+    "name": "Test Person",
+    "email": "you@example.com",
+    "company": "",
+    "budget": "not stated",
+    "timeline": "not stated",
+    "message": "hi"
+  }
+}
